@@ -54,6 +54,103 @@ dataInputTransposeTest = permute(dataInputTest,[2 3 4 1]);
 dsTrain = augmentedImageDatastore(inputSize,dataInputTransposeTrain,dataLabelTrain);
 dsTest = augmentedImageDatastore(inputSize,dataInputTransposeTest,dataLabelTest);
 
+% Create CSCNN Classification Network
+layers = [
+    image3dInputLayer(inputSize,Name="Input",Normalization="None")
+    convolution3dLayer([3 3 7],8,Name="conv3d_1")
+    reluLayer(Name="Relu_1")
+    convolution3dLayer([3 3 5],16,Name="conv3d_2")
+    reluLayer(Name="Relu_2")
+    convolution3dLayer([3 3 3],32,Name="conv3d_3")
+    reluLayer(Name="Relu_3")
+    convolution3dLayer([3 3 1],8,Name="conv3d_4")
+    reluLayer(Name="Relu_4")
+    fullyConnectedLayer(256,Name="fc1")
+    reluLayer(Name="Relu_5")
+    dropoutLayer(0.4,Name="drop_1")
+    fullyConnectedLayer(128,Name="fc2")
+    dropoutLayer(0.4,Name="drop_2")
+    fullyConnectedLayer(numClasses,Name="fc3")
+    softmaxLayer(Name="softmax")
+    classificationLayer(Name="output")];
+lgraph = layerGraph(layers);
+
+% Visualizing the network using Deep Network Designer
+deepNetworkDesigner(lgraph)
+
+% Specify the required network parameters. For this example, train the network for 
+% 100 epochs with an initial learning rate of 0.001, a batch size of 256, and 
+% Adam optimization.
+
+numEpochs = 100;
+miniBatchSize = 256;
+initLearningRate = 0.001;
+momentum = 0.9;
+learningRateFactor = 0.01;
+
+options = trainingOptions("adam", ...
+    InitialLearnRate=initLearningRate, ...
+    LearnRateSchedule="piecewise", ...
+    LearnRateDropPeriod=30, ...
+    LearnRateDropFactor=learningRateFactor, ...
+    MaxEpochs=numEpochs, ...
+    MiniBatchSize=miniBatchSize, ...
+    GradientThresholdMethod="l2norm", ...
+    GradientThreshold=0.01, ...
+    VerboseFrequency=100, ...
+    ValidationData=dsTest, ...
+    ValidationFrequency=100);
+
+% Train the network
+doTraining = true;
+if doTraining
+    net = trainNetwork(dsTrain,lgraph,options);
+    modelDateTime = string(datetime("now",Format="yyyy-MM-dd-HH-mm-ss"));
+    save("trainedIndianPinesCSCNN-"+modelDateTime+".mat","net");
+else
+    dataDir = pwd;
+    trainedNetwork_url = "https://ssd.mathworks.com/supportfiles/image/data/trainedIndianPinesCSCNN.mat";
+    downloadTrainedNetwork(trainedNetwork_url,pwd);
+    load(fullfile(dataDir,"trainedIndianPinesCSCNN.mat"));
+end
+
+% Classify Hyperspectral Image Using Trained CSCNN
+% Calculate the accuracy of the classification for the test data set. Here, accuracy 
+% is the fraction of the correct pixel classification over all the classes.
+predictionTest = classify(net,dsTest);
+accuracy = sum(predictionTest == dataLabelTest)/numel(dataLabelTest);
+disp("Accuracy of the test data = "+num2str(accuracy))
+
+% Reconstruct the complete image by classifying all image pixels, including pixels in 
+% labeled training patches, pixels in labeled test patches, and unlabeled pixels
+prediction = classify(net,dsAllPatches);
+prediction = double(prediction);
+
+% The network is trained on labeled patches only. Therefore, the predicted 
+% classification of unlabeled pixels is meaningless. Find the unlabeled patches 
+% and set the label to 0.
+patchesUnlabeled = find(allLabels==0);
+prediction(patchesUnlabeled) = 0;
+
+% Reshape the classified pixels to match the dimensions of the ground truth image.
+[m,n,d] = size(imageData);
+indianPinesPrediction = reshape(prediction,[n m]);
+indianPinesPrediction = indianPinesPrediction';
+
+% Display the ground truth and predicted classification.
+cmap = parula(numClasses);
+
+figure
+tiledlayout(1,2,TileSpacing="Tight")
+nexttile
+imshow(gtLabel,cmap)
+title("Ground Truth Classification")
+
+nexttile
+imshow(indianPinesPrediction,cmap)
+colorbar
+title("Predicted Classification")
+
 %function that creates patches in the image
 function [patchData,patchLabel] = createImagePatchesFromHypercube(hcube,groundTruthLabel,winSize)
 
